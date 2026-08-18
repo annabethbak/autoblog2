@@ -1,0 +1,15 @@
+{
+  "name": "autoblog2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Naver Blog 글쓰기 화면(SmartEditor ONE)을 Playwright로 자동화해 글을 발행하는 도구",
+  "scripts": {
+    "login": "node src/login.js",
+    "publish": "node scripts/publish-post.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.56.1"
+  }
+}

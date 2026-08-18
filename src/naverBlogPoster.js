@@ -18,7 +18,8 @@ import { chromium } from 'playwright';
 import { config, urls } from './config.js';
 
 const SELECTORS = {
-  editorFrame: 'iframe#mainFrame',
+  // id="mainFrame" 뿐 아니라 name="mainFrame" 으로만 잡히는 경우도 있어 둘 다 매칭한다.
+  editorFrame: 'iframe[name="mainFrame"], iframe#mainFrame',
   // 제목 입력 영역 (문서 제목 컴포넌트)
   title: '.se-documentTitle .se-text-paragraph',
   // 본문 첫 문단 (문서 제목 컴포넌트는 제외하고 본문 영역만)
@@ -141,15 +142,21 @@ async function fillBody(page, editorFrame, bodyText) {
   }
 }
 
-/** 태그 입력 (옵션) */
-async function fillTags(editorFrame, tags = []) {
+/**
+ * 태그 입력 (옵션).
+ * 네이버 에디터는 입력 필드에서 붙여넣기/fill() 을 막아놓은 경우가 있어,
+ * 제목·본문과 마찬가지로 클릭 후 키보드 타이핑 방식으로 입력한다.
+ * (Enter로 태그가 확정되면 입력창은 보통 자동으로 비워진다.)
+ */
+async function fillTags(page, editorFrame, tags = []) {
   if (!tags.length) return;
   try {
     const tagInput = editorFrame.getByPlaceholder(SELECTORS.tagInput);
     await tagInput.waitFor({ state: 'visible', timeout: 5000 });
     for (const tag of tags) {
-      await tagInput.fill(tag);
-      await tagInput.press('Enter');
+      await tagInput.click();
+      await page.keyboard.type(tag, { delay: 10 });
+      await page.keyboard.press('Enter');
     }
   } catch (err) {
     console.warn('⚠️  태그 입력란을 찾지 못해 태그는 건너뜁니다:', err.message);
@@ -189,7 +196,7 @@ async function publishFlow(page, editorFrame, { category, tags, visibility, dryR
     }
   }
 
-  await fillTags(editorFrame, tags);
+  await fillTags(page, editorFrame, tags);
   await setVisibility(editorFrame, visibility);
 
   if (dryRun) {

@@ -183,12 +183,57 @@ async function setVisibility(editorFrame, visibility) {
 }
 
 /**
+ * "도움말" 패널이 열려 있으면 닫는다. 이 패널이 발행 버튼 위에 떠서 클릭을
+ * 가로채는(intercepts pointer events) 경우가 있어, 발행 관련 버튼을 클릭
+ * 하기 직전마다 호출한다.
+ *
+ * 패널 컨테이너 클래스(container__HW_tc 같은 것)는 CSS 모듈 해시라 빌드마다
+ * 바뀔 수 있어 의존하지 않는다. 대신:
+ *   1) 접근성 라벨 기준으로 닫기(X) 버튼을 먼저 찾아 클릭
+ *   2) 못 찾으면 Escape 키로 닫기 시도
+ * 둘 다 실패해도 에러는 던지지 않고 경고만 남긴다 — 패널이 애초에 없었을
+ * 수도 있고, 이어지는 클릭이 실패하면 그쪽에서 스크린샷과 함께 에러가 난다.
+ */
+async function dismissHelpPanel(page, editorFrame) {
+  const helpTitle = editorFrame.locator('h1.se-help-title', { hasText: '도움말' }).first();
+
+  let isOpen = false;
+  try {
+    isOpen = await helpTitle.isVisible({ timeout: 1000 });
+  } catch {
+    isOpen = false;
+  }
+  if (!isOpen) return;
+
+  console.warn('⚠️  "도움말" 패널이 열려 있어 닫습니다 (발행 버튼을 가리고 있을 수 있음).');
+
+  let closed = false;
+  try {
+    // 닫기 버튼은 보통 "닫기" 접근성 라벨을 가진 X 아이콘 버튼이다.
+    await editorFrame.getByRole('button', { name: /닫기|close/i }).first().click({ timeout: 2000 });
+    closed = true;
+  } catch {
+    // 아래 Escape 폴백으로 진행
+  }
+
+  if (!closed) {
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+
+  await helpTitle.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {
+    console.warn('⚠️  도움말 패널이 안 닫힌 것 같습니다. 이어지는 클릭이 실패할 수 있어요.');
+  });
+}
+
+/**
  * 상단 "발행" 버튼 → 발행 설정 패널 → 패널 안의 최종 "발행" 버튼까지 클릭한다.
  * 패널이 열리면 화면에 "발행" 텍스트를 가진 버튼이 2개(툴바용 + 패널 확정용)
  * 존재할 수 있어, 패널이 열린 뒤 나타나는 마지막 버튼을 최종 발행으로 간주한다.
  * 실제 DOM에서 다르면 이 함수의 로케이터만 교체하면 된다.
  */
 async function publishFlow(page, editorFrame, { category, tags, visibility, dryRun }) {
+  await dismissHelpPanel(page, editorFrame);
+
   const openPanelBtn = editorFrame.getByRole('button', SELECTORS.publishButton).first();
   await openPanelBtn.click();
 
@@ -207,6 +252,8 @@ async function publishFlow(page, editorFrame, { category, tags, visibility, dryR
     console.log('🔎 dryRun 모드: 실제 발행 버튼은 누르지 않습니다.');
     return;
   }
+
+  await dismissHelpPanel(page, editorFrame);
 
   const confirmBtn = editorFrame.getByRole('button', SELECTORS.publishButton).last();
   await confirmBtn.click();

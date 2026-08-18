@@ -22,8 +22,11 @@ const SELECTORS = {
   editorFrame: 'iframe[name="mainFrame"], iframe#mainFrame',
   // 제목 입력 영역 (문서 제목 컴포넌트)
   title: '.se-documentTitle .se-text-paragraph',
-  // 본문 첫 문단 (문서 제목 컴포넌트는 제외하고 본문 영역만)
-  bodyFirstParagraph: '.se-main-container .se-component.se-text .se-text-paragraph',
+  // 본문 영역: 문서 제목 컴포넌트(.se-documentTitle)를 제외한 첫 번째 컴포넌트.
+  // `.se-text-paragraph` 로 본문 문단을 직접 찾는 방식은 codegen으로 확인한
+  // 결과 실제로 존재하지 않아 타임아웃만 났다 — 클래스명에 의존하지 않는
+  // 구조적 셀렉터로 대체 (fillBody 주석 참고).
+  bodyArea: '.se-main-container .se-component:not(.se-documentTitle)',
   publishButton: { role: 'button', name: '발행' },
   tagInput: /태그/, // getByPlaceholder 용 정규식
 };
@@ -89,40 +92,37 @@ async function fillTitle(page, editorFrame, title) {
 /**
  * 본문 입력. 여러 줄이면 줄바꿈마다 새 문단(Enter)으로 나눠 입력한다.
  *
- * ⚠️ 실사용 중 발견된 버그와 수정 내용:
- * 본문 영역(placeholder) 위에는 "나를 돌아보는 회고..." 같은 글감 추천
- * 배너가 얹혀 있는 경우가 있다. 예전 코드처럼 bodyFirstParagraph 를 곧장
- * 클릭하면, 클릭 자체는 성공(예외 없음)하지만 좌표가 그 배너 위젯에
- * 맞아버려 실제 contenteditable 에는 포커스가 안 들어가고, 그 뒤
- * page.keyboard.type() 은 허공에 입력되어 아무 에러 없이 조용히
- * 실패한다 — 제목은 들어가는데 본문만 안 들어가는 증상이 바로 이것.
+ * ⚠️ codegen으로 확인된 실제 동작:
+ * `.se-text-paragraph` 클래스로 본문 문단을 직접 찾는 방식은 타임아웃만
+ * 나고 실제로는 못 찾는다. 반대로 본문 영역에 표시되는 placeholder/글감
+ * 추천 텍스트(예: "나를 돌아보는 회고, 뜻밖의 발견을 기다립니다. #모두의회고")를
+ * getByText 로 클릭하면 확실하게 포커스가 잡힌다.
  *
- * 대응:
- *   1) 클릭 대신 Tab 으로 포커스를 이동한다 (SmartEditor ONE은 제목
- *      컴포넌트에서 Tab을 누르면 본문 첫 문단으로 포커스를 넘겨준다).
- *      Tab은 좌표 기반이 아니라 실수로 다른 위젯을 클릭할 여지가 없다.
- *   2) Tab 이후에도 포커스가 본문 문단으로 이동하지 않았다면(에디터 버전에
- *      따라 Tab 바인딩이 다를 수 있음) bodyFirstParagraph 를 직접 클릭하는
- *      걸로 폴백한다.
- *   3) 타이핑 후 iframe 컨텍스트 안에서 실제로 텍스트가 들어갔는지 읽어
- *      확인한다. 비어 있으면 조용히 넘어가지 않고 에러를 던진다.
+ * 다만 그 문구는 매번 랜덤하게 바뀔 수 있어 정확한 문자열에 의존하면 또
+ * 깨지기 쉽다. 그래서:
+ *   1) 문서 제목 컴포넌트(.se-documentTitle)를 제외한 본문 영역
+ *      (SELECTORS.bodyArea) 안에서, "보이는 텍스트가 있는 아무 요소"를
+ *      느슨한 정규식(/\S/)으로 찾아 클릭한다 — 특정 문구가 아니라
+ *      "본문 영역 안의 텍스트"라는 구조적 특징만 사용하므로 placeholder
+ *      문구가 바뀌어도 그대로 동작한다.
+ *   2) 그 텍스트조차 없으면(이미 내용이 있어 placeholder가 안 보이는 등)
+ *      본문 컴포넌트 컨테이너 자체를 클릭하는 걸로 폴백한다.
+ *   3) 클릭이 성공하면 바로 page.keyboard.type() 으로 타이핑하고, 끝난 뒤
+ *      실제로 반영됐는지 읽어 확인한다. 비어 있으면 조용히 넘어가지 않고
+ *      에러를 던진다.
  */
 async function fillBody(page, editorFrame, bodyText) {
-  const bodyParagraph = editorFrame.locator(SELECTORS.bodyFirstParagraph).first();
+  const bodyArea = editorFrame.locator(SELECTORS.bodyArea).first();
+  await bodyArea.waitFor({ state: 'attached', timeout: 10000 });
 
-  // 본문 컴포넌트가 DOM에 붙을 때까지 대기 (제목만 렌더된 초기 타이밍 방지)
-  await bodyParagraph.waitFor({ state: 'attached', timeout: 10000 });
-
-  await page.keyboard.press('Tab');
-
-  const focusedAfterTab = await bodyParagraph
-    .evaluate((el) => el === document.activeElement || el.contains(document.activeElement))
-    .catch(() => false);
-
-  if (!focusedAfterTab) {
-    console.warn('⚠️  Tab으로 본문 포커스 이동을 확인하지 못해, 본문 문단을 직접 클릭합니다.');
-    await bodyParagraph.click();
+  let clickTarget = bodyArea.getByText(/\S/).first();
+  try {
+    await clickTarget.waitFor({ state: 'visible', timeout: 3000 });
+  } catch {
+    // placeholder 텍스트가 안 보이면 컨테이너 자체를 클릭
+    clickTarget = bodyArea;
   }
+  await clickTarget.click();
 
   const lines = bodyText.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -133,11 +133,11 @@ async function fillBody(page, editorFrame, bodyText) {
   }
 
   // silent failure 방지: 실제로 반영됐는지 iframe 컨텍스트 안에서 확인
-  const typedText = await bodyParagraph.innerText().catch(() => '');
+  const typedText = await bodyArea.innerText().catch(() => '');
   if (!typedText.trim()) {
     throw new Error(
-      '본문을 입력했지만 에디터에 반영되지 않았습니다(포커스가 다른 요소로 간 것으로 보임). ' +
-        'debug/ 스크린샷과 SELECTORS.bodyFirstParagraph 값을 실제 DOM과 대조해 확인해주세요.'
+      '본문을 입력했지만 에디터에 반영되지 않았습니다. ' +
+        'debug/ 스크린샷과 SELECTORS.bodyArea 값을 실제 DOM과 대조해 확인해주세요.'
     );
   }
 }

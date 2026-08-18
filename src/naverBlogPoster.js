@@ -231,11 +231,24 @@ async function dismissHelpPanel(page, editorFrame) {
  * "저장" 버튼(발행 버튼 왼쪽의 임시저장, 스크린샷의 "저장 7")만 클릭한다.
  * --dry-run 테스트용: 제목/본문이 에디터에 잘 반영됐는지 임시저장으로
  * 확인하고 끝내고 싶을 때 쓴다. 발행 버튼에는 절대 손대지 않는다.
+ *
+ * ⚠️ click() 은 클릭 이벤트를 보낸 시점에 곧바로 resolve 되고, 그 클릭이
+ * 트리거하는 저장 요청(비동기 XHR)이 끝나길 기다려주지 않는다. 이 함수가
+ * 끝나자마자 publishPost 에서 브라우저를 닫아버리면, 네이버 서버에 저장이
+ * 반영되기 전에 요청이 끊겨 임시저장 목록에 안 뜨는 문제가 있었다.
+ * 그래서 클릭 후 "저장했습니다" 류의 완료 토스트를 기다리고, 그 토스트를
+ * 못 찾으면 최소한 5초는 대기한 뒤에 리턴한다.
  */
 async function clickSaveDraft(page, editorFrame) {
   await dismissHelpPanel(page, editorFrame);
   const saveBtn = editorFrame.getByRole('button', SELECTORS.saveButton).first();
   await saveBtn.click();
+
+  const savedToast = editorFrame.getByText(/저장(했습니다|되었습니다|완료)/).first();
+  await savedToast.waitFor({ state: 'visible', timeout: 5000 }).catch(async () => {
+    console.warn('⚠️  저장 완료 메시지를 못 찾아, 안전하게 5초 대기 후 종료합니다.');
+    await page.waitForTimeout(5000);
+  });
 }
 
 /**

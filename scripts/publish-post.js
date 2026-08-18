@@ -11,7 +11,7 @@
 //   --tags         콤마로 구분한 태그 목록 (옵션)
 //   --category     정확한 카테고리 이름 (옵션)
 //   --visibility   all | neighbor | me (옵션, 기본값: 건드리지 않음 = 에디터 기본값 유지)
-//   --dry-run      끝까지 입력만 하고 최종 발행 버튼은 누르지 않음
+//   --dry-run      제목/본문만 입력하고 "저장"(임시저장) 버튼만 누름 (발행 버튼은 안 건드림)
 
 import fs from 'node:fs';
 import { publishPost } from '../src/naverBlogPoster.js';

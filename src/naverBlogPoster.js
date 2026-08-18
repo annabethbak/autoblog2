@@ -30,6 +30,8 @@ const SELECTORS = {
   // 스코프해서 제목 문단(.se-documentTitle, se-section-text 클래스 없음)은
   // 자연스럽게 제외한다.
   bodyParagraph: '.se-section-text .se-text-paragraph',
+  // 발행 버튼 왼쪽의 임시저장 버튼 (스크린샷엔 "저장 7" 처럼 숫자 배지와 같이 표시됨)
+  saveButton: { role: 'button', name: /저장/ },
   publishButton: { role: 'button', name: '발행' },
   tagInput: /태그/, // getByPlaceholder 용 정규식
 };
@@ -226,12 +228,27 @@ async function dismissHelpPanel(page, editorFrame) {
 }
 
 /**
+ * "저장" 버튼(발행 버튼 왼쪽의 임시저장, 스크린샷의 "저장 7")만 클릭한다.
+ * --dry-run 테스트용: 제목/본문이 에디터에 잘 반영됐는지 임시저장으로
+ * 확인하고 끝내고 싶을 때 쓴다. 발행 버튼에는 절대 손대지 않는다.
+ */
+async function clickSaveDraft(page, editorFrame) {
+  await dismissHelpPanel(page, editorFrame);
+  const saveBtn = editorFrame.getByRole('button', SELECTORS.saveButton).first();
+  await saveBtn.click();
+}
+
+/**
  * 상단 "발행" 버튼 → 발행 설정 패널 → 패널 안의 최종 "발행" 버튼까지 클릭한다.
  * 패널이 열리면 화면에 "발행" 텍스트를 가진 버튼이 2개(툴바용 + 패널 확정용)
  * 존재할 수 있어, 패널이 열린 뒤 나타나는 마지막 버튼을 최종 발행으로 간주한다.
  * 실제 DOM에서 다르면 이 함수의 로케이터만 교체하면 된다.
+ *
+ * ⚠️ dry-run 에서는 이 함수 자체를 호출하지 않는다 (publishPost 참고) —
+ * 발행 버튼 클릭 로직은 아직 손보는 중이라, 테스트 중에 실수로라도 눌리는
+ * 일이 없도록 아예 경로를 분리해뒀다.
  */
-async function publishFlow(page, editorFrame, { category, tags, visibility, dryRun }) {
+async function publishFlow(page, editorFrame, { category, tags, visibility }) {
   await dismissHelpPanel(page, editorFrame);
 
   const openPanelBtn = editorFrame.getByRole('button', SELECTORS.publishButton).first();
@@ -247,11 +264,6 @@ async function publishFlow(page, editorFrame, { category, tags, visibility, dryR
 
   await fillTags(page, editorFrame, tags);
   await setVisibility(editorFrame, visibility);
-
-  if (dryRun) {
-    console.log('🔎 dryRun 모드: 실제 발행 버튼은 누르지 않습니다.');
-    return;
-  }
 
   await dismissHelpPanel(page, editorFrame);
 
@@ -288,12 +300,23 @@ export async function publishPost(post) {
       throw err;
     });
 
+    if (post.dryRun) {
+      // 발행 버튼 로직은 아직 다듬는 중이라, dry-run 에서는 publishFlow를
+      // 아예 호출하지 않고 저장 버튼만 눌러서 끝낸다 (발행 버튼 미터치 보장).
+      await clickSaveDraft(page, editorFrame).catch(async (err) => {
+        await screenshotOnError(page, 'click-save-draft');
+        throw err;
+      });
+      console.log('✅ dryRun: 저장 버튼까지 클릭 완료 (발행 버튼은 누르지 않았습니다).');
+      return;
+    }
+
     await publishFlow(page, editorFrame, post).catch(async (err) => {
       await screenshotOnError(page, 'publish-flow');
       throw err;
     });
 
-    console.log(post.dryRun ? '✅ 작성 완료 (발행은 생략됨).' : '✅ 발행 완료.');
+    console.log('✅ 발행 완료.');
   } finally {
     await browser.close();
   }

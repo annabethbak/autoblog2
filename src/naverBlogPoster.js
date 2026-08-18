@@ -22,11 +22,14 @@ const SELECTORS = {
   editorFrame: 'iframe[name="mainFrame"], iframe#mainFrame',
   // 제목 입력 영역 (문서 제목 컴포넌트)
   title: '.se-documentTitle .se-text-paragraph',
-  // 본문 영역: 문서 제목 컴포넌트(.se-documentTitle)를 제외한 첫 번째 컴포넌트.
-  // `.se-text-paragraph` 로 본문 문단을 직접 찾는 방식은 codegen으로 확인한
-  // 결과 실제로 존재하지 않아 타임아웃만 났다 — 클래스명에 의존하지 않는
-  // 구조적 셀렉터로 대체 (fillBody 주석 참고).
-  bodyArea: '.se-main-container .se-component:not(.se-documentTitle)',
+  // 본문 문단. 개발자도구로 실제 DOM을 확인한 결과, 본문 문단은
+  //   .se-section.se-section-text > .se-module.se-module-text > .se-text-paragraph
+  // 구조였다. `.se-text-paragraph` 클래스 자체는 있었지만, 이전에 쓰던
+  // 조상 스코프(.se-main-container .se-component.se-text 등)가 실제 구조와
+  // 안 맞아서 매번 0개 매칭 → 타임아웃이었던 것. `.se-section-text` 로만
+  // 스코프해서 제목 문단(.se-documentTitle, se-section-text 클래스 없음)은
+  // 자연스럽게 제외한다.
+  bodyParagraph: '.se-section-text .se-text-paragraph',
   publishButton: { role: 'button', name: '발행' },
   tagInput: /태그/, // getByPlaceholder 용 정규식
 };
@@ -92,35 +95,36 @@ async function fillTitle(page, editorFrame, title) {
 /**
  * 본문 입력. 여러 줄이면 줄바꿈마다 새 문단(Enter)으로 나눠 입력한다.
  *
- * ⚠️ codegen으로 확인된 실제 동작:
- * `.se-text-paragraph` 클래스로 본문 문단을 직접 찾는 방식은 타임아웃만
- * 나고 실제로는 못 찾는다. 반대로 본문 영역에 표시되는 placeholder/글감
- * 추천 텍스트(예: "나를 돌아보는 회고, 뜻밖의 발견을 기다립니다. #모두의회고")를
- * getByText 로 클릭하면 확실하게 포커스가 잡힌다.
+ * ⚠️ 개발자도구로 실제 DOM을 확인해 잡은 버그:
+ * `.se-text-paragraph` 클래스 자체는 처음부터 존재했다. 문제는 이전에 쓰던
+ * 조상 스코프(.se-main-container .se-component.se-text 등)가 실제 구조와
+ * 안 맞아서 매번 0개 매칭 → 타임아웃이었던 것. 실제 구조는:
+ *   .se-section.se-section-text > .se-module.se-module-text > .se-text-paragraph
+ * 이라서, SELECTORS.bodyParagraph 는 `.se-section-text .se-text-paragraph`
+ * 로 스코프한다 (제목은 .se-documentTitle 래퍼를 쓰고 se-section-text
+ * 클래스가 없어 자연히 제외됨).
  *
- * 다만 그 문구는 매번 랜덤하게 바뀔 수 있어 정확한 문자열에 의존하면 또
- * 깨지기 쉽다. 그래서:
- *   1) 문서 제목 컴포넌트(.se-documentTitle)를 제외한 본문 영역
- *      (SELECTORS.bodyArea) 안에서, "보이는 텍스트가 있는 아무 요소"를
- *      느슨한 정규식(/\S/)으로 찾아 클릭한다 — 특정 문구가 아니라
- *      "본문 영역 안의 텍스트"라는 구조적 특징만 사용하므로 placeholder
- *      문구가 바뀌어도 그대로 동작한다.
- *   2) 그 텍스트조차 없으면(이미 내용이 있어 placeholder가 안 보이는 등)
- *      본문 컴포넌트 컨테이너 자체를 클릭하는 걸로 폴백한다.
- *   3) 클릭이 성공하면 바로 page.keyboard.type() 으로 타이핑하고, 끝난 뒤
- *      실제로 반영됐는지 읽어 확인한다. 비어 있으면 조용히 넘어가지 않고
- *      에러를 던진다.
+ * 문단 안에는 실제 텍스트가 들어갈 span과 placeholder용 span(.se-placeholder)
+ * 이 같이 있는데, 그 자식 span이 아니라 문단(<p class="se-text-paragraph">)
+ * 자체를 클릭 대상으로 삼는다 — placeholder 문구는 매번 랜덤하게 바뀔 수
+ * 있어 특정 문자열에 의존하지 않기 위함이다.
+ *
+ * 혹시 SELECTORS.bodyParagraph 가 안 맞는 에디터 변형을 만나면, 최후의
+ * 수단으로 iframe 전체에서 `.se-text-paragraph` 를 모두 찾아 첫 번째(보통
+ * 제목)를 건너뛴 두 번째 요소를 시도한다. 이건 순서에 기대는 추측이라
+ * 확실하진 않으니, 이 경로를 타면 경고를 남긴다.
  */
 async function fillBody(page, editorFrame, bodyText) {
-  const bodyArea = editorFrame.locator(SELECTORS.bodyArea).first();
-  await bodyArea.waitFor({ state: 'attached', timeout: 10000 });
-
-  let clickTarget = bodyArea.getByText(/\S/).first();
+  let clickTarget = editorFrame.locator(SELECTORS.bodyParagraph).first();
   try {
-    await clickTarget.waitFor({ state: 'visible', timeout: 3000 });
+    await clickTarget.waitFor({ state: 'visible', timeout: 10000 });
   } catch {
-    // placeholder 텍스트가 안 보이면 컨테이너 자체를 클릭
-    clickTarget = bodyArea;
+    console.warn(
+      `⚠️  ${SELECTORS.bodyParagraph} 를 못 찾았습니다. ` +
+        '최후의 수단으로 .se-text-paragraph 중 두 번째 요소(제목 다음)를 시도합니다.'
+    );
+    clickTarget = editorFrame.locator('.se-text-paragraph').nth(1);
+    await clickTarget.waitFor({ state: 'visible', timeout: 5000 });
   }
   await clickTarget.click();
 
@@ -132,12 +136,12 @@ async function fillBody(page, editorFrame, bodyText) {
     }
   }
 
-  // silent failure 방지: 실제로 반영됐는지 iframe 컨텍스트 안에서 확인
-  const typedText = await bodyArea.innerText().catch(() => '');
+  // silent failure 방지: 실제로 반영됐는지 (클릭했던 그 요소 기준으로) 확인
+  const typedText = await clickTarget.innerText().catch(() => '');
   if (!typedText.trim()) {
     throw new Error(
       '본문을 입력했지만 에디터에 반영되지 않았습니다. ' +
-        'debug/ 스크린샷과 SELECTORS.bodyArea 값을 실제 DOM과 대조해 확인해주세요.'
+        'debug/ 스크린샷과 SELECTORS.bodyParagraph 값을 실제 DOM과 대조해 확인해주세요.'
     );
   }
 }
